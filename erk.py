@@ -20,3 +20,12 @@ def get_ffme_returns():
     rets.index.name = "Period"
     
     return rets
+
+def get_hfi_returns():
+    hfi = pd.read_csv("data/edhec-hedgefundindices.csv",
+                             header = 0, index_col = 0 , parse_dates = True)
+    hfi = hfi / 100
+    hfi.index = hfi.index.to_period("M")
+    hfi.index.name = "Period"
+    
+    return hfi
