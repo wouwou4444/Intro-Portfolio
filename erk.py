@@ -44,6 +44,25 @@ def get_ind_returns():
     return rets
 
 
+def get_ind_size():
+    ind = pd.read_csv("data/ind30_m_size.csv",
+                             header = 0, index_col = 0 , na_values = -99.99)
+    ind.index = pd.to_datetime(ind.index, format = "%Y%m").to_period("M")
+    ind.index.name = "Period"
+    ind.columns = (ind.columns.str.strip())
+    
+    return ind
+
+def get_ind_nfirms():
+    ind = pd.read_csv("data/ind30_m_nfirms.csv",
+                             header = 0, index_col = 0 , na_values = -99.99)
+    ind.index = pd.to_datetime(ind.index, format = "%Y%m").to_period("M")
+    ind.index.name = "Period"
+    ind.columns = (ind.columns.str.strip())
+    
+    return ind
+
+##################################################################################
 def skewness(serie_returns:pd.Series):
     deviation = serie_returns - serie_returns.mean()
     deviation3 = (deviation ** 3).mean()
@@ -151,14 +170,43 @@ def plot_ef2(n_points, er, cov, style = ".-"):
     return ef.plot.line(x = "Vol", y = "R", style = style, figsize = (16, 6))
 
 
-def plot_ef(n_points, er, cov, style = ".-"):
+def plot_ef(n_points, er, cov, show_CML = False,style = ".-", riskfree_rate = 0, show_ew = False, show_gmv = False, show_gmv2 = False):
 
     weights = optimal_weights(n_points, er, cov) # ???
     
     rets = [ portfolio_return(w, er) for w in weights]
     vols = [ portfolio_vol(w, cov) for w in weights]
-    ef = pd.DataFrame({"R": rets, "Vol": vols})
-    return ef.plot.line(x = "Vol", y = "R", style = style, figsize = (16, 6))
+    ef = pd.DataFrame({"Returns": rets, "Volatility": vols})
+    ax = ef.plot.line(x = "Volatility", y = "Returns", style = style, figsize = (16,12))
+ 
+    if show_gmv:
+        w_gmv = gmv(cov)
+        r_gmv= portfolio_return(w_gmv, er)
+        vol_gmv = portfolio_vol(w_gmv, cov)
+        ax.plot([vol_gmv], [r_gmv], color = "midnightblue", marker = "o",  markersize = 9)
+
+    if show_gmv2:
+        w_gmv2 = gmv2(cov)
+        r_gmv2= portfolio_return(w_gmv2, er)
+        vol_gmv2 = portfolio_vol(w_gmv2, cov)
+        ax.plot([vol_gmv2], [r_gmv2], color = "darkred", marker = "o",  markersize = 9)
+
+    if show_ew:
+        n = er.shape[0]
+        w_ew = np.repeat(1/n, n)
+        r_ew= portfolio_return(w_ew, er)
+        vol_ew = portfolio_vol(w_ew, cov)
+        ax.plot([vol_ew], [r_ew], color = "goldenrod", marker = "o",  markersize = 12)
+        
+    if show_CML:
+        ax.set_xlim(left = 0)
+        w_msr = msr(riskfree_rate, er , cov)
+        r_msr = portfolio_return(w_msr, er)
+        vol_msr = portfolio_vol(w_msr, cov)
+        cml_x = [0, vol_msr]
+        cml_y = [riskfree_rate, r_msr]
+        ax.plot(cml_x, cml_y, color = "green", marker = "o", linestyle = "dashed", markersize = 12, linewidth = 2)
+    return ax
 
 
 def optimal_weights(n_points, er, cov):
@@ -196,8 +244,28 @@ def minimize_vol(target_return, er, cov, disp = False):
     else:
         return results.x
     
+def gmv(cov, riskfree_rate = 0, value = 1):
+    n = cov.shape[0]
+    return msr(riskfree_rate, np.repeat(value, n), cov)
 
-
+def gmv2(cov):
+    n = cov.shape[0]
+    init_guess = np.repeat(1/n, n)
+    bounds = ((0, 1),) * n
+    weights_sum_to_1 = {
+        "type": "eq",
+        "fun": lambda w: np.sum(w) - 1
+    }
+    results = minimize(portfolio_vol,
+                       init_guess,
+                       args = (cov,),
+                       method = "SLSQP",
+                       options = { "disp": False},
+                       constraints = (weights_sum_to_1),
+                       bounds = bounds
+    )
+    return results.x
+    
 def msr(riskfree_rate, er, cov, disp = False):
     """
     RiskFree Rate, er, cov -> msr
