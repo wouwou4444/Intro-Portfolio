@@ -62,6 +62,15 @@ def get_ind_nfirms():
     
     return ind
 
+def get_total_market_index_returns():
+    ind_return = get_ind_returns()
+    ind_nfirms = get_ind_nfirms()
+    ind_size = get_ind_size()
+    ind_mktcap = ind_nfirms * ind_size
+    total_mktcap = ind_mktcap.sum(axis = "columns")
+    ind_capweight = ind_mktcap.divide(total_mktcap, axis = "rows")
+    return (ind_capweight * ind_return).sum(axis = "columns")
+    
 ##################################################################################
 def skewness(serie_returns:pd.Series):
     deviation = serie_returns - serie_returns.mean()
@@ -139,7 +148,7 @@ def annualize_vol(r, periods_per_year = 12):
     return r.std(ddof=0) * (periods_per_year**0.5)
 
 
-def sharpe_ratio(r, riskfree_rate,periods_per_year):
+def sharpe_ratio(r, riskfree_rate,periods_per_year = 12 ):
     rf_per_period = (1 + riskfree_rate)**(1/periods_per_year) - 1
     excess_ret = r - rf_per_period
     ann_ex_ret = annualize_ret(excess_ret, periods_per_year)
@@ -297,4 +306,89 @@ def msr(riskfree_rate, er, cov, disp = False):
         return results.x
     
 
+########################################################################
+def run_ccpi(risky_r, safe_r = None, m = 3, start = 1000, floor = 0.8, riskfree_rate = 0.03, drawdown = None ):
+    
+    dates = risky_r.index
+    n_steps = len(dates)
+    account_value = start
+    floor_value = start * floor
+
+    if isinstance(risky_r, pd.Series):
+        risky_r = pd.DataFrame({"R": risky_r})
+        
+    account_value_history = pd.DataFrame().reindex_like(risky_r)
+    cushion_history = pd.DataFrame().reindex_like(risky_r)
+    risky_weight_history = pd.DataFrame().reindex_like(risky_r)
+    
+
+    
+    if safe_r is None:
+        safe_r = pd.DataFrame().reindex_like(risky_r)
+        safe_r[:] = riskfree_rate/12
+    
+    peak = start
+    for step in range(n_steps):
+        if drawdown is not None:
+            peak = np.maximum(peak, account_value)
+            floor_value = peak * (1 - drawdown)
+        cushion = (account_value - floor_value) / account_value
+        risky_weight = m * cushion
+        risky_weight = np.minimum(risky_weight, 1)
+        risky_weight = np.maximum(risky_weight, 0)
+        
+        safe_weight = 1 - risky_weight
+        
+        risky_allocation = account_value * risky_weight
+        safe_allocation = account_value * safe_weight
+        
+        # Update account value for this allocation
+        account_value = (risky_allocation * (1 + risky_r.iloc[step]) + 
+                         safe_allocation * (1 + safe_r.iloc[step]) )
+        cushion_history.iloc[step] = cushion
+        risky_weight_history.iloc[step] = risky_weight
+        account_value_history.iloc[step] = account_value
+        
+        
+    risky_wealth = start * (1+ risky_r).cumprod()
+    ax1 = account_value_history.plot(figsize = (16,8))
+    risky_wealth.plot(ax = ax1, style = "--")
+    
+    if drawdown is None:
+        ax1.axhline(y = floor_value)
+    
+    result = {
+        "Wealth": account_value_history,
+        "Risky Wealth": risky_wealth,
+        "Risky Budget": cushion_history,
+        "Risky Allocation": risky_weight_history,
+        "m": m,
+        "start": start,
+        "floor": floor,
+        "risky_r": risky_r,
+        "safe_r": safe_r
+    }
+    
+    return result
+
+def summary_stats(r, riskfree_rate = 0.03):
+    ann_r = r.aggregate(annualize_ret)
+    ann_vol = r.aggregate(annualize_vol)
+    ann_sr = r.aggregate(sharpe_ratio, riskfree_rate = riskfree_rate)
+    dd = r.aggregate(lambda r: drawdown(r).DrawDown.min())
+    skew = r.aggregate(skewness)
+    kurt = r.aggregate(kurtosis)
+    cf_var5 = r.aggregate(var_gaussian, modified = True)
+    hist_cvar5 = r.aggregate(cvar_historic)
+    
+    return pd.DataFrame({
+        "Annualized Return": ann_r,
+        "Annualized Vol": ann_vol,
+        "Sharpe Ratio": ann_sr,
+        "Skewness": skew,
+        "Kurtosis": kurt,
+        "Cornish-Fisher Var(5%)": cf_var5,
+        "Historic CVar(5%)": hist_cvar5,
+        "Max Drawdown": dd
+    })
     
