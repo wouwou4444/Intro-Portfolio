@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import scipy.stats
 from scipy.optimize import minimize
+import matplotlib.pyplot as plt
 
 def drawdown(return_series: pd.Series):
     """
@@ -351,6 +352,66 @@ def run_ccpi(risky_r, safe_r = None, m = 3, start = 1000, floor = 0.8, riskfree_
         
         
     risky_wealth = start * (1+ risky_r).cumprod()
+    
+    result = {
+        "Wealth": account_value_history,
+        "Risky Wealth": risky_wealth,
+        "Risky Budget": cushion_history,
+        "Risky Allocation": risky_weight_history,
+        "m": m,
+        "start": start,
+        "floor": floor,
+        "risky_r": risky_r,
+        "safe_r": safe_r
+    }
+    
+    return result
+
+########################################################################
+def run_ccpi_and_plot(risky_r, safe_r = None, m = 3, start = 1000, floor = 0.8, riskfree_rate = 0.03, drawdown = None ):
+    
+    dates = risky_r.index
+    n_steps = len(dates)
+    account_value = start
+    floor_value = start * floor
+
+    if isinstance(risky_r, pd.Series):
+        risky_r = pd.DataFrame({"R": risky_r})
+        
+    account_value_history = pd.DataFrame().reindex_like(risky_r)
+    cushion_history = pd.DataFrame().reindex_like(risky_r)
+    risky_weight_history = pd.DataFrame().reindex_like(risky_r)
+    
+
+    
+    if safe_r is None:
+        safe_r = pd.DataFrame().reindex_like(risky_r)
+        safe_r[:] = riskfree_rate/12
+    
+    peak = start
+    for step in range(n_steps):
+        if drawdown is not None:
+            peak = np.maximum(peak, account_value)
+            floor_value = peak * (1 - drawdown)
+        cushion = (account_value - floor_value) / account_value
+        risky_weight = m * cushion
+        risky_weight = np.minimum(risky_weight, 1)
+        risky_weight = np.maximum(risky_weight, 0)
+        
+        safe_weight = 1 - risky_weight
+        
+        risky_allocation = account_value * risky_weight
+        safe_allocation = account_value * safe_weight
+        
+        # Update account value for this allocation
+        account_value = (risky_allocation * (1 + risky_r.iloc[step]) + 
+                         safe_allocation * (1 + safe_r.iloc[step]) )
+        cushion_history.iloc[step] = cushion
+        risky_weight_history.iloc[step] = risky_weight
+        account_value_history.iloc[step] = account_value
+        
+        
+    risky_wealth = start * (1+ risky_r).cumprod()
     ax1 = account_value_history.plot(figsize = (16,8))
     risky_wealth.plot(ax = ax1, style = "--")
     
@@ -370,6 +431,7 @@ def run_ccpi(risky_r, safe_r = None, m = 3, start = 1000, floor = 0.8, riskfree_
     }
     
     return result
+
 
 def summary_stats(r, riskfree_rate = 0.03):
     ann_r = r.aggregate(annualize_ret)
@@ -391,4 +453,70 @@ def summary_stats(r, riskfree_rate = 0.03):
         "Historic CVar(5%)": hist_cvar5,
         "Max Drawdown": dd
     })
+    
+########## 
+#### Geometric Brownian Motion Model
+
+def gbm(n_years = 10, n_scenarios = 1000, mu = 0.07, sigma = 0.15, prices = False, steps_per_year = 12, s_0 = 100):
+    """
+    Evolution of a stock using a Geometric Brownian Motion Model
+    """
+    
+    dt = 1 / steps_per_year
+    n_steps = n_years * steps_per_year
+    
+    if prices:
+        rets1p = np.random.normal(loc = 1 + mu * dt, scale =sigma * np.sqrt(dt), size = (n_steps, n_scenarios))
+        rets1p = pd.DataFrame(rets1p)
+        rets1p = pd.concat([pd.DataFrame(np.ones(shape = (1, n_scenarios))), rets1p])
+        prices = s_0 * rets1p.cumprod()
+        return prices
+    else:
+        rets1p = np.random.normal(loc = mu * dt, scale =sigma * np.sqrt(dt), size = (n_steps, n_scenarios))
+        rets1p = pd.DataFrame(rets1p)
+        return rets1p
+
+def show_gbm(n_scenarios, mu, sigma):
+    s_0 = 100
+    prices = gbm(n_scenarios = n_scenarios, mu = mu, sigma = sigma, s_0 = s_0)
+    ax = prices. plot(legend = False, figsize = (16, 8))
+    
+def show_cppi(n_scenarios= 50, mu = 0.07, sigma = 0.15, m=3, floor = 0., riskfree_rate= 0.03, y_max = 100):
+    start = 100
+    sim_rets = gbm(n_scenarios= n_scenarios, mu = mu, sigma = sigma, prices = False, steps_per_year= 12)
+    risky_r = pd.DataFrame(sim_rets)
+    btr = run_ccpi(risky_r = pd.DataFrame(risky_r), riskfree_rate= riskfree_rate, m = m, start = start, floor = floor)
+    wealth = btr["Wealth"]
+    terminal_wealth = wealth.iloc[-1]
+    
+    tw_mean = terminal_wealth.mean()
+    tw_median = terminal_wealth.median()
+    failure_mask = np.less(terminal_wealth, start*floor)
+    np_failures = failure_mask.sum()
+    p_fail = np_failures / n_scenarios
+    
+    e_shortfall = np.dot(terminal_wealth - start * floor,failure_mask)/np_failures if np_failures > 0 else 0.0
+    
+    #print(pd.DataFrame({"tw":terminal_wealth, "tw_failure":failure_mask}))
+    
+    fig, (wealth_ax, hist_ax) = plt.subplots(nrows = 1, ncols = 2, sharey = True, gridspec_kw = {'width_ratios': [3,2]}, figsize = (24,9))
+    plt.subplots_adjust(wspace = 0)
+    y_max = wealth.values.max() * y_max / 100
+    wealth.plot(ax = wealth_ax, legend = False, alpha = 0.3, color = "indianred")
+    wealth_ax.axhline(y= start*floor, ls ="--", color ="red")
+    wealth_ax.axhline( y= start, ls = ":", color = "black")
+    
+    wealth_ax.set_ylim(top = y_max)
+    
+    terminal_wealth.plot.hist(ax= hist_ax, orientation = "horizontal", bins = 50, ec = "w", fc = "red")
+    
+    hist_ax.annotate(f"mean: {tw_mean}\nmedian:{tw_median}", xy= (.7, y_max *.75 ), fontsize = 24)
+    
+    if (floor > 0.01):
+        hist_ax.annotate(f"Violations: {np_failures}\n({p_fail})\nE_shortfall:{e_shortfall}", 
+                         xy= (.5, y_max / 2 - 48), fontsize = 24)
+        
+    
+    
+    
     
